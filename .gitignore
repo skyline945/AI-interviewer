@@ -1,0 +1,6 @@
+# 本地 Claude Code 配置（含本地权限，不提交）
+.claude/
+
+# 临时文件
+*.log
+_tmp/
