@@ -58,13 +58,26 @@ export function judgeSystem(
 - 匹配度 fit_delta：是否契合"读研做科研"的素质与方向（-10 到 +10）
 - 危险值 danger_delta：是否踩雷（0 到 +15，只加不减）
 
-【硬信号类型（命中必在 triggers 里标出，并附原话引用）】
-- contradiction：与简历或之前回答前后矛盾
-- fabrication：内容与简历不符、疑似编造
-- template：明显背模板、空话套话
-- evasion：回避问题、含糊其辞、用"不会/没做过"硬挡
-- vague：缺少具体细节、没有量化、泛泛而谈
-- offtopic：答非所问、偏题
+【危险值校准铁律——务必遵守】
+danger_delta 只针对"踩雷"：明显失信或失态的硬信号。一个内容真实、只是不够深入或不够出彩的普通回答，danger_delta 必须为 0——把"深度不够/细节不足/泛泛而谈"这类质量缺陷扣在 recognition_delta 或 fit_delta 上，而不是 danger。只有出现下列危险信号时才给 danger_delta > 0，且 magnitude 按严重程度给（轻微 2-4、明显 6-9、严重 10-15）。
+
+【硬信号类型（只有前 5 类算"踩雷"并写入 triggers；vague 不算）】
+- contradiction：与简历或之前回答前后矛盾 → 危险（danger）
+- fabrication：内容与简历不符、疑似编造 → 危险（danger）
+- template：明显背模板、空话套话、假大空 → 危险（danger）
+- evasion：回避问题、用"不会/没做过/不清楚"硬挡 → 危险（danger）
+- offtopic：答非所问、明显偏题 → 危险（danger）
+- vague：缺少具体细节、没有量化 → 仅扣 recognition/fit，不给 danger，也不写入 triggers
+
+【评分范例——照此校准】
+例1（好答案）：问"你具体做了什么贡献"，答"我独立实现了数据增强模块，试了随机裁剪/MixUp/颜色抖动，并用消融实验证明组合后 mIoU 从 82.1 升到 84.4"。
+→ {"trust_delta":2,"recognition_delta":3,"fit_delta":2,"danger_delta":0,"triggers":[],"note":"有具体做法和量化结果，可再讲清为何这样设计"}
+
+例2（普通答案）：问"为什么用这个损失函数"，答"因为效果好，大家都用这个，我试了几个就这个最好"。
+→ {"trust_delta":0,"recognition_delta":-2,"fit_delta":-1,"danger_delta":0,"triggers":[],"note":"缺少原理性理由，只说'效果好'太空泛"}
+
+例3（踩雷答案）：问"这个项目你做了什么"，答"这个我不太清楚，主要是学长做的，我就跑了一下"。
+→ {"trust_delta":-6,"recognition_delta":-4,"fit_delta":-5,"danger_delta":8,"triggers":[{"type":"evasion","evidence":"这个我不太清楚，主要是学长做的","explain":"回避个人贡献，涉嫌简历注水"}],"note":"明确回避核心问题，简历真实性存疑"}
 
 【学生背景】方向：${DIRECTION_NAMES[direction]}；简历：${resume.slice(0, 800)}
 ${flagLine}
