@@ -3,7 +3,9 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import type {
   Direction,
+  InterviewerProfile,
   Report,
+  ResumeWeakSpot,
   Round,
   ScoreEvent,
   Scores,
@@ -17,6 +19,7 @@ import {
   saveToCollection,
   type SavedCard,
 } from "@/lib/collection";
+import { extractResumeText } from "@/lib/pdf";
 
 const STAGE_LABELS: Record<StageKey, string> = {
   opening: "开场",
@@ -36,10 +39,24 @@ const STAGE_ORDER: StageKey[] = [
   "closing",
 ];
 
+function fmtTime(sec: number): string {
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
 interface ChatMsg {
   role: "interviewer" | "student";
   content: string;
   stage: StageKey;
+  hesitate?: number; // 该学生回答前的犹豫秒数
+}
+
+interface ResumeArgs {
+  targetStage: StageKey;
+  targetRoundId: string;
+  replacementAnswer: string;
+  replacementEvent: ScoreEvent;
 }
 
 const INIT_SCORES: Scores = { trust: 50, recognition: 50, fit: 50, danger: 0 };
@@ -62,11 +79,28 @@ export default function Home() {
   const [collection, setCollection] = useState<SavedCard[]>([]);
   const [saved, setSaved] = useState(false);
   const [fromCollection, setFromCollection] = useState(false);
+  const [hideScores, setHideScores] = useState(false);
+  const [interviewerProfile, setInterviewerProfile] = useState<InterviewerProfile | null>(null);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [weakSpots, setWeakSpots] = useState<ResumeWeakSpot[]>([]);
+  const [scanning, setScanning] = useState(false);
+  const [thinkingSec, setThinkingSec] = useState(0);
+  const qAskedAtRef = useRef(0);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  // 答题计时：从面试官抛出问题起，累计学生的犹豫秒数（面试官追问时不走表）
+  useEffect(() => {
+    if (phase !== "interview" || pending || done) return;
+    const tick = () =>
+      setThinkingSec(Math.max(0, Math.floor((Date.now() - qAskedAtRef.current) / 1000)));
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [phase, pending, done]);
 
   useEffect(() => {
     setCollection(loadCollection());
@@ -91,12 +125,14 @@ export default function Home() {
     setPending(true);
     setError("");
     try {
-      const data = await api({ action: "start", direction, resume });
+      const data = await api({ action: "start", direction, resume, interviewer: interviewerProfile, weakSpots });
       setSessionId(data.sessionId);
       setScores(data.scores);
       setStage(data.stage);
       setMessages([{ role: "interviewer", content: data.message, stage: data.stage }]);
       setPhase("interview");
+      qAskedAtRef.current = Date.now();
+      setThinkingSec(0);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -107,8 +143,9 @@ export default function Home() {
   async function handleSend() {
     const content = input.trim();
     if (!content || pending || done) return;
+    const took = Math.max(0, Math.round((Date.now() - qAskedAtRef.current) / 1000));
     setInput("");
-    setMessages((m) => [...m, { role: "student", content, stage }]);
+    setMessages((m) => [...m, { role: "student", content, stage, hesitate: took }]);
     setPending(true);
     setError("");
     try {
@@ -122,6 +159,8 @@ export default function Home() {
           ...m,
           { role: "interviewer", content: data.message, stage: data.stage },
         ]);
+        qAskedAtRef.current = Date.now();
+        setThinkingSec(0);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -158,6 +197,79 @@ export default function Home() {
     setInput("");
     setSaved(false);
     setFromCollection(false);
+    setHideScores(false);
+    setInterviewerProfile(null);
+    setWeakSpots([]);
+  }
+
+  async function handleResume(args: ResumeArgs) {
+    if (!report) return;
+    setPending(true);
+    setError("");
+    try {
+      const data = await api({
+        action: "resume",
+        direction,
+        resume,
+        stages: report.stages,
+        targetStage: args.targetStage,
+        targetRoundId: args.targetRoundId,
+        replacementAnswer: args.replacementAnswer,
+        replacementEvent: args.replacementEvent,
+        interviewer: report.interviewer ?? null,
+        weakSpots: report.weakSpots ?? [],
+      });
+      setSessionId(data.sessionId);
+      setScores(data.scores);
+      setStage(data.stage);
+      setMessages([
+        ...data.history,
+        { role: "interviewer", content: data.message, stage: data.stage },
+      ]);
+      setDone(false);
+      setReport(null);
+      setFromCollection(false);
+      setInterviewerProfile(report.interviewer ?? null);
+      setPhase("interview");
+      qAskedAtRef.current = Date.now();
+      setThinkingSec(0);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function handleAnalyze(url: string) {
+    const u = url.trim();
+    if (!u) return;
+    setAnalyzing(true);
+    setError("");
+    try {
+      const data = await api({ action: "analyzeInterviewer", url: u });
+      setInterviewerProfile(data.profile);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAnalyzing(false);
+    }
+  }
+
+  async function handleScan() {
+    if (resume.trim().length < 10) {
+      setError("请先粘贴简历，或点右侧示例简历一键载入。");
+      return;
+    }
+    setScanning(true);
+    setError("");
+    try {
+      const data = await api({ action: "scanResume", direction, resume });
+      setWeakSpots(data.weakSpots ?? []);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setScanning(false);
+    }
   }
 
   function handleSave() {
@@ -229,6 +341,15 @@ export default function Home() {
           pending={pending}
           onCollection={openCollection}
           collectionCount={collection.length}
+          hideScores={hideScores}
+          setHideScores={setHideScores}
+          interviewerProfile={interviewerProfile}
+          setInterviewerProfile={setInterviewerProfile}
+          onAnalyze={handleAnalyze}
+          analyzing={analyzing}
+          weakSpots={weakSpots}
+          onScan={handleScan}
+          scanning={scanning}
         />
       )}
 
@@ -244,6 +365,10 @@ export default function Home() {
           done={done}
           pending={pending}
           bottomRef={bottomRef}
+          hideScores={hideScores}
+          setHideScores={setHideScores}
+          interviewer={interviewerProfile}
+          thinkingSec={thinkingSec}
         />
       )}
 
@@ -257,6 +382,7 @@ export default function Home() {
           saved={saved}
           fromCollection={fromCollection}
           onBack={openCollection}
+          onResume={handleResume}
         />
       )}
 
@@ -283,7 +409,17 @@ function Setup(props: {
   pending: boolean;
   onCollection: () => void;
   collectionCount: number;
+  hideScores: boolean;
+  setHideScores: (v: boolean) => void;
+  interviewerProfile: InterviewerProfile | null;
+  setInterviewerProfile: (p: InterviewerProfile | null) => void;
+  onAnalyze: (url: string) => void;
+  analyzing: boolean;
+  weakSpots: ResumeWeakSpot[];
+  onScan: () => void;
+  scanning: boolean;
 }) {
+  const [url, setUrl] = useState("");
   return (
     <div className="grid flex-1 gap-6 md:grid-cols-2">
       <section className="rounded-xl border border-black/10 bg-white p-5">
@@ -309,13 +445,14 @@ function Setup(props: {
           ))}
         </div>
 
-        <h2 className="mb-2 mt-6 text-lg font-semibold">② 粘贴简历（脱敏）</h2>
+        <h2 className="mb-2 mt-6 text-lg font-semibold">② 简历（粘贴，或拖入 PDF 自动识别）</h2>
+        <ResumeDropzone onText={props.setResume} />
         <textarea
           value={props.resume}
           onChange={(e) => props.setResume(e.target.value)}
-          placeholder={"粘贴你的简历，例如：\n【教育背景】…\n【科研经历】…\n【项目经历】…\n【技能】…"}
+          placeholder={"粘贴你的简历，或把 PDF 简历拖进上方区域自动识别。例如：\n【教育背景】…\n【科研经历】…\n【项目经历】…\n【技能】…"}
           rows={10}
-          className="w-full rounded-lg border border-black/10 bg-neutral-50 p-3 text-sm leading-relaxed outline-none focus:border-blue-500"
+          className="mt-2 w-full rounded-lg border border-black/10 bg-neutral-50 p-3 text-sm leading-relaxed outline-none focus:border-blue-500"
         />
         <div className="mt-3 flex flex-wrap gap-2">
           {SAMPLE_RESUMES.map((s) => (
@@ -331,6 +468,67 @@ function Setup(props: {
             </button>
           ))}
         </div>
+
+        <div className="mt-3">
+          <button
+            onClick={props.onScan}
+            disabled={props.scanning || props.resume.trim().length < 10}
+            className="rounded-lg border border-amber-400 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-700 transition hover:bg-amber-100 disabled:opacity-40"
+          >
+            {props.scanning ? "🔍 面试官正在挑刺…" : "🔍 扫描简历软肋（面试官会从哪撕你）"}
+          </button>
+          {props.weakSpots.length > 0 && (
+            <div className="mt-2 space-y-2">
+              {props.weakSpots.map((w, i) => (
+                <div key={i} className="rounded-lg border border-rose-200 bg-rose-50 p-3">
+                  <div className="flex items-start gap-2">
+                    <span className="mt-0.5 shrink-0 rounded bg-rose-600 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                      软肋 {i + 1}
+                    </span>
+                    <span className="text-sm font-medium text-rose-800">{w.point}</span>
+                  </div>
+                  {w.reason && <div className="mt-1 text-xs text-rose-600/80">为什么可疑：{w.reason}</div>}
+                  {w.probe && <div className="mt-1 text-xs text-rose-700">面试官会追问：{w.probe}</div>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <h2 className="mb-2 mt-6 text-lg font-semibold">③ 面试官（可选，模拟真实面试）</h2>
+        <p className="mb-2 text-xs text-neutral-500">
+          如果知道面试你的导师，粘贴 TA 的个人主页链接，我们会抓取并分析其研究重点、近期论文与面试风格。
+        </p>
+        <div className="flex gap-2">
+          <input
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") props.onAnalyze(url);
+            }}
+            placeholder="https://…（导师/老师个人主页）"
+            className="flex-1 rounded-lg border border-black/10 bg-neutral-50 px-3 py-2 text-sm outline-none focus:border-blue-500"
+          />
+          <button
+            onClick={() => props.onAnalyze(url)}
+            disabled={props.analyzing || !url.trim()}
+            className="rounded-lg bg-indigo-600 px-4 text-sm font-medium text-white transition hover:bg-indigo-700 disabled:opacity-40"
+          >
+            {props.analyzing ? "分析中…" : "分析面试官"}
+          </button>
+        </div>
+        {props.interviewerProfile ? (
+          <InterviewerCard
+            profile={props.interviewerProfile}
+            onClear={() => props.setInterviewerProfile(null)}
+          />
+        ) : (
+          props.analyzing && (
+            <div className="mt-2 text-xs text-neutral-500">
+              正在抓取主页并分析画像…（约 10 秒）
+            </div>
+          )
+        )}
       </section>
 
       <section className="flex flex-col justify-between rounded-xl border border-black/10 bg-white p-5">
@@ -347,6 +545,15 @@ function Setup(props: {
             全程文字对话，约 6 个阶段、9 轮追问。你的回答会被 AI 评分，
             危险值只增不减——诚实作答，才是真正的训练。
           </p>
+          <label className="mt-4 flex cursor-pointer items-center gap-2 rounded-lg border border-black/10 bg-neutral-50 p-3 text-sm text-neutral-700">
+            <input
+              type="checkbox"
+              checked={props.hideScores}
+              onChange={(e) => props.setHideScores(e.target.checked)}
+              className="h-4 w-4 accent-blue-600"
+            />
+            <span>隐藏本场评分（模拟真实面试，结束后再揭晓）</span>
+          </label>
         </div>
         <button
           onClick={props.onStart}
@@ -356,6 +563,147 @@ function Setup(props: {
           {props.pending ? "面试官入场中…" : "开始面试"}
         </button>
       </section>
+    </div>
+  );
+}
+
+function ResumeDropzone({ onText }: { onText: (t: string) => void }) {
+  const [dragging, setDragging] = useState(false);
+  const [parsing, setParsing] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  async function handleFile(file: File) {
+    setMsg(null);
+    setParsing(true);
+    try {
+      const text = await extractResumeText(file);
+      if (text.trim().length < 10) {
+        setMsg({ ok: false, text: "没识别出文字，可能是扫描版 PDF，请手动粘贴。" });
+        return;
+      }
+      onText(text);
+      setMsg({ ok: true, text: `✓ 已识别 ${text.length} 字，可在下方继续编辑。` });
+    } catch (e) {
+      setMsg({
+        ok: false,
+        text: e instanceof Error ? e.message : "识别失败，请手动粘贴。",
+      });
+    } finally {
+      setParsing(false);
+    }
+  }
+
+  return (
+    <div>
+      <div
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragging(true);
+        }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragging(false);
+          const f = e.dataTransfer.files?.[0];
+          if (f) handleFile(f);
+        }}
+        onClick={() => inputRef.current?.click()}
+        className={`flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed px-4 py-4 text-center transition ${
+          dragging
+            ? "border-blue-500 bg-blue-50"
+            : "border-black/15 bg-neutral-50 hover:border-blue-300"
+        }`}
+      >
+        <div className="text-2xl">📄</div>
+        <div className="mt-1 text-sm font-medium text-neutral-700">
+          {parsing ? "正在识别 PDF 文字…" : "拖入 PDF 简历，自动识别"}
+        </div>
+        <div className="text-xs text-neutral-500">或点击选择文件（PDF / TXT）</div>
+        <input
+          ref={inputRef}
+          type="file"
+          accept=".pdf,.txt,.md"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) handleFile(f);
+            e.target.value = "";
+          }}
+        />
+      </div>
+      {msg && (
+        <div className={`mt-2 text-xs ${msg.ok ? "text-emerald-600" : "text-red-600"}`}>
+          {msg.text}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function InterviewerCard({
+  profile,
+  onClear,
+}: {
+  profile: InterviewerProfile;
+  onClear: () => void;
+}) {
+  return (
+    <div className="mt-3 rounded-lg border border-indigo-200 bg-indigo-50/60 p-3">
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <div className="font-medium text-neutral-800">
+            👤 {profile.name}
+            {profile.title && (
+              <span className="ml-2 text-xs text-neutral-500">{profile.title}</span>
+            )}
+          </div>
+          {profile.institution && (
+            <div className="text-xs text-neutral-500">{profile.institution}</div>
+          )}
+        </div>
+        <button
+          onClick={onClear}
+          className="shrink-0 rounded px-1.5 py-0.5 text-xs text-neutral-400 hover:bg-black/5"
+        >
+          清除
+        </button>
+      </div>
+      {profile.researchFocus.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {profile.researchFocus.map((f, i) => (
+            <span key={i} className="rounded bg-white px-1.5 py-0.5 text-xs text-indigo-700">
+              {f}
+            </span>
+          ))}
+        </div>
+      )}
+      {profile.papers && profile.papers.length > 0 ? (
+        <div className="mt-2 text-xs text-neutral-600">
+          <div className="mb-1 text-neutral-500">近期论文（DBLP 补全）：</div>
+          <ul className="space-y-1">
+            {profile.papers.map((p, i) => (
+              <li key={i} className="leading-snug">
+                {p.title}
+                {p.venue || p.year ? (
+                  <span className="text-neutral-400">
+                    {" · "}
+                    {[p.venue, p.year].filter(Boolean).join(" ")}
+                  </span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : (
+        profile.recentPapers.length > 0 && (
+          <div className="mt-2 text-xs text-neutral-600">
+            <span className="text-neutral-500">近期论文：</span>
+            {profile.recentPapers.join("；")}
+          </div>
+        )
+      )}
+      <p className="mt-2 text-xs leading-relaxed text-neutral-600">{profile.persona}</p>
     </div>
   );
 }
@@ -373,6 +721,10 @@ function Interview(props: {
   done: boolean;
   pending: boolean;
   bottomRef: RefObject<HTMLDivElement | null>;
+  hideScores: boolean;
+  setHideScores: (v: boolean) => void;
+  interviewer: InterviewerProfile | null;
+  thinkingSec: number;
 }) {
   return (
     <div className="grid flex-1 gap-4 lg:grid-cols-[1fr_260px]">
@@ -380,14 +732,25 @@ function Interview(props: {
         <div className="flex items-center justify-between border-b border-black/10 px-4 py-2 text-sm">
           <span className="font-medium text-neutral-700">
             阶段：<span className="text-blue-600">{STAGE_LABELS[props.stage]}</span>
+            {props.interviewer && (
+              <span className="ml-2 text-neutral-400">面试官：{props.interviewer.name}</span>
+            )}
           </span>
-          <button
-            onClick={props.onEnd}
-            disabled={props.pending}
-            className="rounded-md border border-black/10 px-2 py-0.5 text-xs text-neutral-500 hover:bg-neutral-100"
-          >
-            提前结束并复盘
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => props.setHideScores(!props.hideScores)}
+              className="rounded-md border border-black/10 px-2 py-0.5 text-xs text-neutral-500 hover:bg-neutral-100"
+            >
+              {props.hideScores ? "👁 显示评分" : "🙈 隐藏评分"}
+            </button>
+            <button
+              onClick={props.onEnd}
+              disabled={props.pending}
+              className="rounded-md border border-black/10 px-2 py-0.5 text-xs text-neutral-500 hover:bg-neutral-100"
+            >
+              提前结束并复盘
+            </button>
+          </div>
         </div>
 
         <div className="flex-1 space-y-4 overflow-y-auto p-4" style={{ maxHeight: "62vh" }}>
@@ -408,6 +771,11 @@ function Interview(props: {
                 </div>
                 <div className="max-w-[80%] rounded-2xl rounded-tr-sm bg-blue-600 px-4 py-2.5 text-sm leading-relaxed text-white">
                   {m.content}
+                  {m.hesitate != null && (
+                    <div className="mt-1 text-right text-[11px] text-white/60">
+                      ⏱ 犹豫 {fmtTime(m.hesitate)}
+                    </div>
+                  )}
                 </div>
               </div>
             )
@@ -434,33 +802,53 @@ function Interview(props: {
               面试结束 · 查看复盘报告 →
             </button>
           ) : (
-            <div className="flex gap-2">
-              <textarea
-                value={props.input}
-                onChange={(e) => props.setInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    props.onSend();
-                  }
-                }}
-                placeholder="输入你的回答…（Enter 发送，Shift+Enter 换行）"
-                rows={2}
-                className="flex-1 resize-none rounded-lg border border-black/10 bg-neutral-50 p-3 text-sm outline-none focus:border-blue-500"
-              />
-              <button
-                onClick={props.onSend}
-                disabled={props.pending || !props.input.trim()}
-                className="rounded-lg bg-blue-600 px-6 font-medium text-white transition hover:bg-blue-700 disabled:opacity-40"
-              >
-                发送
-              </button>
+            <div>
+              <div className="mb-2 flex items-center justify-between text-xs">
+                <span className="text-neutral-400">正在思考你的回答…</span>
+                <span
+                  className={`font-medium tabular-nums ${
+                    props.thinkingSec >= 60
+                      ? "text-rose-500"
+                      : props.thinkingSec >= 20
+                        ? "text-amber-500"
+                        : "text-neutral-500"
+                  }`}
+                >
+                  ⏱ 已犹豫 {fmtTime(props.thinkingSec)}
+                </span>
+              </div>
+              <div className="flex gap-2">
+                <textarea
+                  value={props.input}
+                  onChange={(e) => props.setInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      props.onSend();
+                    }
+                  }}
+                  placeholder="输入你的回答…（Enter 发送，Shift+Enter 换行）"
+                  rows={2}
+                  className="flex-1 resize-none rounded-lg border border-black/10 bg-neutral-50 p-3 text-sm outline-none focus:border-blue-500"
+                />
+                <button
+                  onClick={props.onSend}
+                  disabled={props.pending || !props.input.trim()}
+                  className="rounded-lg bg-blue-600 px-6 font-medium text-white transition hover:bg-blue-700 disabled:opacity-40"
+                >
+                  发送
+                </button>
+              </div>
             </div>
           )}
         </div>
       </section>
 
-      <ScoreHUD scores={props.scores} />
+      {props.hideScores ? (
+        <HiddenScoreHint onReveal={() => props.setHideScores(false)} />
+      ) : (
+        <ScoreHUD scores={props.scores} />
+      )}
     </div>
   );
 }
@@ -500,6 +888,24 @@ function ScoreHUD({ scores }: { scores: Scores }) {
         信任/认可/匹配从 50 起，随回答增减；危险值从 0 起，只增不减。
         高危险值会触发面试官更尖锐的追问。
       </p>
+    </aside>
+  );
+}
+
+function HiddenScoreHint({ onReveal }: { onReveal: () => void }) {
+  return (
+    <aside className="flex flex-col items-center justify-center rounded-xl border border-dashed border-black/15 bg-white p-4 text-center">
+      <div className="text-3xl">🙈</div>
+      <p className="mt-2 text-sm font-medium text-neutral-700">本场评分已隐藏</p>
+      <p className="mt-1 text-xs leading-relaxed text-neutral-500">
+        真实面试里你同样看不到打分，专心答题，结束后一起揭晓。
+      </p>
+      <button
+        onClick={onReveal}
+        className="mt-3 rounded-md border border-black/10 px-3 py-1 text-xs text-neutral-500 hover:bg-black/5"
+      >
+        临时看一眼
+      </button>
     </aside>
   );
 }
@@ -548,6 +954,7 @@ function Review(props: {
   saved: boolean;
   fromCollection: boolean;
   onBack: () => void;
+  onResume: (args: ResumeArgs) => void;
 }) {
   const { report } = props;
   return (
@@ -573,7 +980,12 @@ function Review(props: {
             点开每道题 → 看最佳答案 / 读档重答
           </span>
         </div>
-        <QuestionTree report={report} direction={props.direction} resume={props.resume} />
+        <QuestionTree
+          report={report}
+          direction={props.direction}
+          resume={props.resume}
+          onResume={props.onResume}
+        />
       </section>
 
       <div className="grid gap-6 lg:grid-cols-2">
@@ -743,11 +1155,19 @@ function QuestionTree({
   report,
   direction,
   resume,
+  onResume,
 }: {
   report: Report;
   direction: Direction;
   resume: string;
+  onResume: (args: ResumeArgs) => void;
 }) {
+  const flat = STAGE_ORDER.flatMap((key) => {
+    const node = report.stages.find((s) => s.stage === key);
+    return node ? node.rounds.map((r) => r.id) : [];
+  });
+  const lastId = flat.length ? flat[flat.length - 1] : "";
+
   return (
     <div className="space-y-4">
       {STAGE_ORDER.map((key) => {
@@ -764,6 +1184,8 @@ function QuestionTree({
                   stage={key}
                   direction={direction}
                   resume={resume}
+                  onResume={onResume}
+                  isLast={r.id === lastId}
                 />
               ))}
             </div>
@@ -779,11 +1201,15 @@ function TreeNode({
   stage,
   direction,
   resume,
+  onResume,
+  isLast,
 }: {
   round: Round;
   stage: StageKey;
   direction: Direction;
   resume: string;
+  onResume: (args: ResumeArgs) => void;
+  isLast: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [modelOpen, setModelOpen] = useState(false);
@@ -961,6 +1387,21 @@ function TreeNode({
                     </div>
                   </div>
                   <p className="mt-2 text-sm text-neutral-600">{reResult.note}</p>
+                  {!isLast && (
+                    <button
+                      onClick={() =>
+                        onResume({
+                          targetStage: stage,
+                          targetRoundId: round.id,
+                          replacementAnswer: reText.trim(),
+                          replacementEvent: reResult,
+                        })
+                      }
+                      className="mt-3 w-full rounded-lg bg-indigo-600 py-2 text-sm font-medium text-white transition hover:bg-indigo-700"
+                    >
+                      ▶ 带着新回答，从这道题接着往后面
+                    </button>
+                  )}
                 </div>
               )}
             </div>
