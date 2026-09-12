@@ -33,12 +33,20 @@
 
 ---
 
+## 特色能力
+
+- **简历软肋预判**：开场前 AI 从面试官视角扫出 3 个最可能被撕的点（软肋 + 为什么可疑 + 怎么追问），面试官全程优先攻击这些软肋。
+- **面试官画像**：粘贴导师主页链接 → 爬取 + LLM 画像（研究方向/风格/近期论文），再用 OpenAlex 补全真实论文，追问往 TA 的研究方向靠。
+- **犹豫计时**：回答时实时计时，复盘里标注「犹豫 N 秒」，暴露临场卡顿，逼你正视「想太久」。
+- **PDF 简历识别**：拖入 PDF 简历自动提取文本（pdf.js 同源），不用手打。
+
 ## 技术栈
 
 - **前端**：Next.js 16（App Router）+ React 19 + TypeScript + Tailwind CSS v4
 - **后端**：Next.js Route Handlers（`/api/interview`）+ 内存会话存储
 - **AI**：Anthropic 兼容 Messages API（本地代理 → deepseek 后端），`thinking` 已禁用以保证稳定输出
 - **可视化**：手写 SVG 四维曲线 + 追问树，四序列色板通过色觉无障碍校验
+- **数据**：OpenAlex 公开学术 API（论文补全，免 key）；pdf.js（PDF 简历识别，同源加载）
 
 ## 目录结构
 
@@ -46,13 +54,15 @@
 web/
   src/app/
     page.tsx              # 三阶段 SPA：设置 → 面试 → 复盘
-    api/interview/route.ts # API：start / message / end / reanswer
+    api/interview/route.ts # API：start / message / end / reanswer / resume / modelAnswer / scanResume / analyzeInterviewer
     layout.tsx / globals.css
   src/lib/
     interview/engine.ts   # 面试状态机 + 阶段推进
     interview/judge.ts    # 评分引擎（规则 + LLM）
     interview/prompts.ts  # 面试官 & 评分官 prompt
     llm.ts                # LLM 客户端
+    interviewer.ts        # 面试官主页爬取 + OpenAlex 论文补全（服务端）
+    pdf.ts                # 浏览器端 PDF 简历识别（pdf.js，同源）
     seed/data.ts          # 题库 / 示例简历 / 策略卡
     sessionStore.ts       # 内存会话
     types.ts              # 共享类型
@@ -92,9 +102,9 @@ npm run dev        # http://localhost:3000
 
 ## 提交物对照（16 小时项目挑战）
 
-- ✅ 3 分钟演示视频（见 `docs/`）
-- ✅ 公开可访问的 URL（内网穿透）
-- ✅ 1-2 页 Product Memo（`docs/Product-Memo.md`）
+- ⏳ 3 分钟演示视频（脚本见 `docs/演示视频脚本.md`，待录制）
+- ✅ 公开可访问的 URL（内网穿透，需保持隧道在线）
+- ✅ 1-2 页 Product Memo（`docs/Product-Memo.md`，含用户调研）
 - ✅ 公开 GitHub 仓库，含清晰提交历史（本仓库）
 
 ---
