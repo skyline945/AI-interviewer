@@ -1,7 +1,8 @@
 // 评分引擎：规则层硬约束 + LLM 软判断
 import { chatJSON, MODELS } from "../llm";
-import type { DangerTrigger, ScoreEvent, Session, StageKey } from "../types";
+import type { DangerTrigger, Direction, ScoreEvent, Session, StageKey } from "../types";
 import { judgeSystem, type JudgeResult } from "./prompts";
+import { newId } from "../sessionStore";
 
 // —— 规则层：可枚举的硬信号（确定性，不依赖 LLM）——
 const EVASION_WORDS = [
@@ -128,4 +129,30 @@ export async function judgeAnswer(
   });
 
   return event;
+}
+
+// 无状态评分：不依赖内存会话，供「收藏库读档重答」使用
+export async function judgeStandalone(
+  direction: Direction,
+  resume: string,
+  question: string,
+  answer: string,
+  stage: StageKey
+): Promise<ScoreEvent> {
+  const session: Session = {
+    id: newId(),
+    direction,
+    resume,
+    stage,
+    stageRound: 0,
+    turn: 1,
+    scores: { trust: 50, recognition: 50, fit: 50, danger: 0 },
+    messages: [],
+    scoreEvents: [],
+    curve: [],
+    stages: [],
+    currentRound: null,
+    ended: false,
+  };
+  return judgeAnswer(session, question, answer, stage);
 }

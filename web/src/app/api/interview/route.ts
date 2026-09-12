@@ -3,9 +3,11 @@ import {
   startInterview,
   handleMessage,
   buildReport,
+  generateModelAnswer,
+  buildVerdictComment,
 } from "@/lib/interview/engine";
-import { judgeAnswer } from "@/lib/interview/judge";
-import type { Direction, Session } from "@/lib/types";
+import { judgeStandalone } from "@/lib/interview/judge";
+import type { Direction, StageKey } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -15,10 +17,18 @@ type Action =
   | { action: "end"; sessionId: string }
   | {
       action: "reanswer";
-      sessionId: string;
+      direction: Direction;
+      resume: string;
       question: string;
       answer: string;
-      stage: Session["stage"];
+      stage: StageKey;
+    }
+  | {
+      action: "modelAnswer";
+      direction: Direction;
+      resume: string;
+      question: string;
+      stage: StageKey;
     };
 
 export async function POST(request: Request) {
@@ -57,24 +67,40 @@ export async function POST(request: Request) {
         if (!session) {
           return Response.json({ error: "会话不存在或已过期" }, { status: 404 });
         }
-        return Response.json(buildReport(session));
+        const report = buildReport(session);
+        try {
+          report.comment = await buildVerdictComment(session, report);
+        } catch {
+          report.comment =
+            report.verdict === "offer"
+              ? "底子不错，继续保持你的研究热情。"
+              : report.verdict === "waitlist"
+                ? "有潜力，但关键细节还讲不扎实。"
+                : "先把你简历里每个数字的来龙去脉搞清楚，再来。";
+        }
+        return Response.json(report);
       }
 
       case "reanswer": {
-        const session = getSession(body.sessionId);
-        if (!session) {
-          return Response.json({ error: "会话不存在或已过期" }, { status: 404 });
-        }
-        // 用副本评分，不污染原始会话
-        const copy: Session = {
-          ...session,
-          scores: { trust: 50, recognition: 50, fit: 50, danger: 0 },
-          scoreEvents: [],
-          curve: [],
-          messages: [],
-        };
-        const event = await judgeAnswer(copy, body.question, body.answer, body.stage);
-        return Response.json({ scoreEvent: event, scores: copy.scores });
+        // 无状态评分，供读档重答（不依赖内存会话，收藏的卡也能用）
+        const event = await judgeStandalone(
+          body.direction,
+          body.resume,
+          body.question,
+          body.answer,
+          body.stage
+        );
+        return Response.json({ scoreEvent: event });
+      }
+
+      case "modelAnswer": {
+        const answer = await generateModelAnswer(
+          body.direction,
+          body.resume,
+          body.question,
+          body.stage
+        );
+        return Response.json({ answer });
       }
 
       default:

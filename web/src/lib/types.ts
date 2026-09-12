@@ -66,6 +66,7 @@ export interface Report {
   direction: Direction;
   verdict: Verdict;
   verdictReason: string;
+  comment: string; // 面试官最终评语（人格化一句话）
   scores: Scores;
   curve: CurvePoint[];
   dangerEvents: (DangerTrigger & { stage: StageKey; question: string })[];

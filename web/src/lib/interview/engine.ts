@@ -9,7 +9,7 @@ import type {
   Verdict,
 } from "../types";
 import { newId, setSession } from "../sessionStore";
-import { interviewerSystem, FOLLOWUP_INSTRUCTION } from "./prompts";
+import { interviewerSystem, FOLLOWUP_INSTRUCTION, modelAnswerSystem, verdictCommentSystem } from "./prompts";
 import { judgeAnswer } from "./judge";
 import {
   CLOSING_QUESTION,
@@ -211,6 +211,7 @@ export function buildReport(session: Session): Report {
     direction: session.direction,
     verdict,
     verdictReason,
+    comment: "",
     scores,
     curve: session.curve,
     dangerEvents,
@@ -221,3 +222,56 @@ export function buildReport(session: Session): Report {
 }
 
 export const DIRECTION_NAME = DIRECTION_NAMES;
+
+const VERDICT_LABEL: Record<Verdict, string> = {
+  offer: "口头 Offer",
+  waitlist: "待定",
+  reject: "淘汰",
+};
+
+// 生成某道题的「最佳回答」示范（基于学生自己的简历）
+export async function generateModelAnswer(
+  direction: Direction,
+  resume: string,
+  question: string,
+  stage: StageKey
+): Promise<string> {
+  const sys = modelAnswerSystem(direction, resume, question, cfgOf(stage).label);
+  return chat({
+    model: MODELS.sonnet,
+    system: sys,
+    messages: [{ role: "user", content: "请示范。" }],
+    temperature: 0.6,
+    maxTokens: 400,
+  });
+}
+
+// 生成面试官最终评语（一句人格化的话，用于结局卡）
+export async function buildVerdictComment(session: Session, report: Report): Promise<string> {
+  const worst = [...session.scoreEvents].sort((a, b) => b.dangerDelta - a.dangerDelta)[0];
+  const best = [...session.scoreEvents].sort(
+    (a, b) => b.recognitionDelta + b.fitDelta - (a.recognitionDelta + a.fitDelta)
+  )[0];
+  const worstLine = worst && worst.dangerDelta > 0
+    ? `「${worst.answer.slice(0, 80)}」（危险 +${worst.dangerDelta}）`
+    : "";
+  const bestLine = best && best.recognitionDelta + best.fitDelta > 0
+    ? `「${best.answer.slice(0, 80)}」`
+    : "";
+
+  const sys = verdictCommentSystem(
+    session.direction,
+    session.resume,
+    session.scores,
+    VERDICT_LABEL[report.verdict],
+    worstLine,
+    bestLine
+  );
+  return chat({
+    model: MODELS.sonnet,
+    system: sys,
+    messages: [{ role: "user", content: "请给评语。" }],
+    temperature: 0.7,
+    maxTokens: 120,
+  });
+}
