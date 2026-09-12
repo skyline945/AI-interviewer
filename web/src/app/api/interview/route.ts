@@ -5,14 +5,24 @@ import {
   buildReport,
   generateModelAnswer,
   buildVerdictComment,
+  resumeInterview,
+  scanResumeWeaknesses,
 } from "@/lib/interview/engine";
 import { judgeStandalone } from "@/lib/interview/judge";
-import type { Direction, StageKey } from "@/lib/types";
+import { analyzeInterviewer } from "@/lib/interviewer";
+import type {
+  Direction,
+  InterviewerProfile,
+  ResumeWeakSpot,
+  ScoreEvent,
+  StageKey,
+  StageNode,
+} from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
 type Action =
-  | { action: "start"; direction: Direction; resume: string }
+  | { action: "start"; direction: Direction; resume: string; interviewer?: InterviewerProfile | null; weakSpots?: ResumeWeakSpot[] }
   | { action: "message"; sessionId: string; content: string }
   | { action: "end"; sessionId: string }
   | {
@@ -29,7 +39,21 @@ type Action =
       resume: string;
       question: string;
       stage: StageKey;
-    };
+    }
+  | {
+      action: "resume";
+      direction: Direction;
+      resume: string;
+      stages: StageNode[];
+      targetStage: StageKey;
+      targetRoundId: string;
+      replacementAnswer?: string;
+      replacementEvent?: ScoreEvent;
+      interviewer?: InterviewerProfile | null;
+      weakSpots?: ResumeWeakSpot[];
+    }
+  | { action: "scanResume"; direction: Direction; resume: string }
+  | { action: "analyzeInterviewer"; url: string };
 
 export async function POST(request: Request) {
   let body: Action;
@@ -46,7 +70,7 @@ export async function POST(request: Request) {
         if (!resume || resume.trim().length < 10) {
           return Response.json({ error: "简历太短，请粘贴完整简历" }, { status: 400 });
         }
-        const r = await startInterview(direction, resume.trim());
+        const r = await startInterview(direction, resume.trim(), body.interviewer ?? null, body.weakSpots ?? []);
         return Response.json(r);
       }
 
@@ -101,6 +125,43 @@ export async function POST(request: Request) {
           body.stage
         );
         return Response.json({ answer });
+      }
+
+      case "resume": {
+        if (!body.resume || body.resume.trim().length < 10) {
+          return Response.json({ error: "简历太短，无法续档" }, { status: 400 });
+        }
+        if (!Array.isArray(body.stages) || body.stages.length === 0) {
+          return Response.json({ error: "缺少面试记录，无法续档" }, { status: 400 });
+        }
+        const r = await resumeInterview({
+          direction: body.direction,
+          resume: body.resume,
+          stages: body.stages,
+          targetStage: body.targetStage,
+          targetRoundId: body.targetRoundId,
+          replacementAnswer: body.replacementAnswer,
+          replacementEvent: body.replacementEvent,
+          interviewer: body.interviewer ?? null,
+          weakSpots: body.weakSpots ?? [],
+        });
+        return Response.json(r);
+      }
+
+      case "scanResume": {
+        if (!body.resume || body.resume.trim().length < 10) {
+          return Response.json({ error: "简历太短，无法扫描软肋" }, { status: 400 });
+        }
+        const weakSpots = await scanResumeWeaknesses(body.direction, body.resume.trim());
+        return Response.json({ weakSpots });
+      }
+
+      case "analyzeInterviewer": {
+        if (!body.url || !/^https?:\/\//i.test(body.url)) {
+          return Response.json({ error: "请输入 http/https 主页链接" }, { status: 400 });
+        }
+        const profile = await analyzeInterviewer(body.url);
+        return Response.json({ profile });
       }
 
       default:

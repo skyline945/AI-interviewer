@@ -73,6 +73,8 @@ export interface Report {
   stages: StageNode[];
   strategyCards: StrategyCard[];
   highlights: string[];
+  interviewer?: InterviewerProfile | null;
+  weakSpots?: ResumeWeakSpot[];
 }
 
 export interface StrategyCard {
@@ -81,6 +83,33 @@ export interface StrategyCard {
   when: string; // 什么时候用
   how: string; // 怎么用
   example: string; // 范例
+}
+
+export interface PaperInfo {
+  title: string;
+  venue: string; // 期刊/会议
+  year: string; // 年份
+  authors: string[]; // 作者列表
+  url: string; // DBLP / DOI 链接
+}
+
+export interface ResumeWeakSpot {
+  point: string; // 软肋点，一句话
+  reason: string; // 为什么可疑 / 面试官会怀疑什么
+  probe: string; // 面试官会怎么追问（示例问题）
+}
+
+export interface InterviewerProfile {
+  name: string;
+  nameEn?: string; // 英文名/拼音，用于 DBLP 检索
+  title: string; // 职称/头衔
+  institution: string; // 学校/机构
+  researchFocus: string[]; // 研究方向关键词
+  recentPapers: string[]; // 近期论文/项目标题
+  papers?: PaperInfo[]; // DBLP 检索补全后的结构化论文
+  style: string; // 面试风格一句话
+  persona: string; // 一段话人格画像
+  sourceUrl: string;
 }
 
 export interface Session {
@@ -97,4 +126,6 @@ export interface Session {
   stages: StageNode[];
   currentRound: Round | null; // 当前 stage 的追问链
   ended: boolean;
+  interviewer?: InterviewerProfile | null;
+  weakSpots?: ResumeWeakSpot[];
 }

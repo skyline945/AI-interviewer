@@ -1,17 +1,46 @@
 // 面试官 & 评分官 prompt 模板
 
-import type { Direction } from "../types";
+import type { Direction, InterviewerProfile, ResumeWeakSpot } from "../types";
 import { DIRECTION_NAMES } from "../seed/data";
 
 export function interviewerSystem(
   direction: Direction,
   resume: string,
   stageLabel: string,
-  stageInstruction: string
+  stageInstruction: string,
+  profile?: InterviewerProfile | null,
+  weakSpots?: ResumeWeakSpot[]
 ): string {
+  let persona = "";
+  if (profile) {
+    const papersLine =
+      profile.papers && profile.papers.length > 0
+        ? profile.papers
+            .map((p) => {
+              const meta = [p.venue, p.year].filter(Boolean).join("，");
+              return meta ? `${p.title}（${meta}）` : p.title;
+            })
+            .join("；")
+        : profile.recentPapers.join("；") || "未知";
+    persona = `
+【你在模拟的具体面试官】${profile.name}${profile.title ? " · " + profile.title : ""}${profile.institution ? "（" + profile.institution + "）" : ""}
+- 研究方向：${profile.researchFocus.join("、") || "未知"}
+- 近期论文：${papersLine}
+- 面试风格：${profile.style}
+- 人格画像：${profile.persona}
+请尽量代入这位面试官的口吻与研究偏好：提问与追问时优先往 TA 的研究方向靠（在不脱离学生简历的前提下），提问风格贴合 TA 的面试风格；但评分铁律与"绝不泄露评分"的原则不变。`;
+  }
+
+  const weakLine =
+    weakSpots && weakSpots.length > 0
+      ? `\n【本场学生的简历软肋——优先从这里发难，把 TA 逼出真实水平】\n${weakSpots
+          .map((w) => `- ${w.point}｜为什么可疑：${w.reason}｜可这样追问：${w.probe}`)
+          .join("\n")}`
+      : "";
+
   return `你是一位计算机类保研预推免面试的资深教授/PI，正在面试一名本科学生。
 
-你的职责是考察这个学生是否值得被录取为研究生。你的风格：专业、严谨、克制、会深挖细节，但不刻薄、不评价人（只评价回答）、不给虚假鼓励。
+你的职责是考察这个学生是否值得被录取为研究生。你的风格：专业、严谨、克制、会深挖细节，但不刻薄、不评价人（只评价回答）、不给虚假鼓励。${persona}
 
 【学生背景】
 - 报考方向：${DIRECTION_NAMES[direction]}
@@ -19,7 +48,7 @@ export function interviewerSystem(
 ${resume}
 
 【当前面试阶段】${stageLabel}
-${stageInstruction}
+${stageInstruction}${weakLine}
 
 【追问铁律】
 - 学生每回答一次，你都必须基于他真实说的话追问一个 why / how / so-what，挖掘细节、量化、具体做法，不要跳到无关话题。
@@ -141,4 +170,29 @@ export function verdictCommentSystem(
 【最出彩的回答】${best || "无"}
 
 直接输出这一句评语（中文，30 字左右，不加引号、不加"评语："前缀）。`;
+}
+
+// 面试官画像分析：从个人主页正文提取研究重点、近期论文与面试风格
+export function interviewerProfileSystem(url: string, title: string, text: string): string {
+  return `你是一名面试情报分析师。下面是一位导师/面试官个人主页的正文内容（页面标题：${title}，来源：${url}）。请据此分析 TA 的研究方向、近期论文、以及可能的面试风格，输出一个严格的 JSON 对象（不要任何多余文字、不要 markdown 代码块），字段如下：
+{"name":"姓名（主页没给就填\"未知面试官\"）","nameEn":"英文名/拼音，如 Wei Zhang（主页给了就填，没给就空字符串）","title":"职称/头衔，如 教授（没有就空字符串）","institution":"学校/机构（没有就空字符串）","researchFocus":["研究方向关键词，3-8 个"],"recentPapers":["近期论文或项目标题，最多 5 个，没有就空数组"],"style":"面试风格一句话，如 严谨细致、爱追问公式推导（无法判断就写 温和严谨）","persona":"80 字以内的人格画像，概括其研究气质与可能偏好的提问方式"}
+
+主页正文（含导航、页脚等噪声，请聚焦其本人信息）：
+${text}`;
+}
+
+// 简历软肋扫描：以苛刻面试官视角，找出最经不起追问的 3 个点
+export function resumeWeaknessSystem(direction: Direction, resume: string): string {
+  return `你是一位极其苛刻的保研面试官，要在学生进场前，快速找出 TA 简历里最经不起追问的软肋，好让面试时精准发难。请通读下面的简历，输出一个严格 JSON 对象（不要任何多余文字、不要 markdown），字段如下：
+{"weakSpots":[{"point":"软肋点，一句话（如：某项目只写了结果，没有你自己的量化贡献）","reason":"为什么这是软肋、面试官会怀疑什么","probe":"面试官具体会怎么追问，一句示例问题"}]}
+
+要求：
+- 只挑最可能被戳穿的 3 个点，按危险程度从高到低排序；
+- 聚焦这几类硬伤：简历注水、贡献边界模糊、数字/指标站不住、与报考方向不匹配、细节经不起"为什么"追问；
+- 不要挑无关紧要的格式、措辞、篇幅问题。
+
+【报考方向】${DIRECTION_NAMES[direction]}
+【学生简历】${resume}
+
+输出：`;
 }

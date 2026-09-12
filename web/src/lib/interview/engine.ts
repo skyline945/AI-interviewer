@@ -1,15 +1,19 @@
 // 面试状态机：追问骨架 + 半脚本追问 + 阶段推进
-import { chat, MODELS, type LLMMessage } from "../llm";
+import { chat, chatJSON, MODELS, type LLMMessage } from "../llm";
 import type {
   Direction,
+  InterviewerProfile,
   Report,
+  ResumeWeakSpot,
   Round,
+  ScoreEvent,
   Session,
   StageKey,
+  StageNode,
   Verdict,
 } from "../types";
 import { newId, setSession } from "../sessionStore";
-import { interviewerSystem, FOLLOWUP_INSTRUCTION, modelAnswerSystem, verdictCommentSystem } from "./prompts";
+import { interviewerSystem, FOLLOWUP_INSTRUCTION, modelAnswerSystem, verdictCommentSystem, resumeWeaknessSystem } from "./prompts";
 import { judgeAnswer } from "./judge";
 import {
   CLOSING_QUESTION,
@@ -56,11 +60,30 @@ function cfgOf(stage: StageKey) {
   return STAGE_CONFIG.find((s) => s.key === stage)!;
 }
 
-function createSession(direction: Direction, resume: string): Session {
+// 专业抽查：有导师画像时，把题目锚到 TA 的研究方向与近期论文上
+function professionalProfileInstruction(profile: InterviewerProfile): string {
+  const focus = profile.researchFocus.join("、");
+  const papers = (profile.papers ?? [])
+    .slice(0, 3)
+    .map((p) => p.title)
+    .join("；");
+  return `出题铁律：这道专业题必须落在 TA 的研究方向「${focus}」上${
+    papers ? `，并尽量围绕 TA 的近期论文（${papers}）出` : ""
+  }——挑一个与该方向交叉、又能考察学生专业基本功的具体问题；同时结合学生的报考方向与简历，不要脱离学生背景硬套。`;
+}
+
+function createSession(
+  direction: Direction,
+  resume: string,
+  interviewer?: InterviewerProfile | null,
+  weakSpots?: ResumeWeakSpot[]
+): Session {
   return {
     id: newId(),
     direction,
     resume,
+    interviewer: interviewer ?? null,
+    weakSpots: weakSpots ?? [],
     stage: "opening",
     stageRound: 0,
     turn: 0,
@@ -80,15 +103,20 @@ async function nextQuestion(session: Session): Promise<string> {
 
   if (stage === "opening") return OPENING_QUESTION;
   if (stage === "closing") return CLOSING_QUESTION;
-  if (stage === "professional") {
+
+  // 专业抽查：有导师画像时走 LLM 并贴合其研究方向；无画像时才用固定题库兜底
+  if (stage === "professional" && !session.interviewer) {
     const qs = PROFESSIONAL_QUESTIONS[session.direction];
     return qs[round % qs.length];
   }
 
   let instruction = stageInstruction(stage);
+  if (stage === "professional" && session.interviewer) {
+    instruction += "\n" + professionalProfileInstruction(session.interviewer);
+  }
   if (round > 0) instruction += "\n" + FOLLOWUP_INSTRUCTION;
 
-  const sys = interviewerSystem(session.direction, session.resume, cfgOf(stage).label, instruction);
+  const sys = interviewerSystem(session.direction, session.resume, cfgOf(stage).label, instruction, session.interviewer, session.weakSpots);
   return await chat({
     model: MODELS.sonnet,
     system: sys,
@@ -98,11 +126,34 @@ async function nextQuestion(session: Session): Promise<string> {
   });
 }
 
-export async function startInterview(
+// 简历软肋扫描：面试官视角，找出最可能被戳穿的 3 个点
+export async function scanResumeWeaknesses(
   direction: Direction,
   resume: string
+): Promise<ResumeWeakSpot[]> {
+  const data = await chatJSON<{ weakSpots?: ResumeWeakSpot[] }>({
+    model: MODELS.sonnet,
+    system: resumeWeaknessSystem(direction, resume),
+    messages: [{ role: "user", content: "请扫描。" }],
+  });
+  const spots = Array.isArray(data.weakSpots) ? data.weakSpots : [];
+  return spots
+    .filter((w) => w && w.point && String(w.point).trim())
+    .slice(0, 3)
+    .map((w) => ({
+      point: String(w.point).trim(),
+      reason: String(w.reason ?? "").trim(),
+      probe: String(w.probe ?? "").trim(),
+    }));
+}
+
+export async function startInterview(
+  direction: Direction,
+  resume: string,
+  interviewer?: InterviewerProfile | null,
+  weakSpots?: ResumeWeakSpot[]
 ): Promise<{ sessionId: string; message: string; scores: Session["scores"]; stage: StageKey }> {
-  const session = createSession(direction, resume);
+  const session = createSession(direction, resume, interviewer, weakSpots);
   const q = await nextQuestion(session);
   session.messages.push({ role: "interviewer", content: q, stage: "opening" });
   session.currentRound = { id: newId(), question: q, answer: "", danger: false };
@@ -218,6 +269,8 @@ export function buildReport(session: Session): Report {
     stages: session.stages,
     strategyCards: cardsForTriggers(allTriggerTypes),
     highlights,
+    interviewer: session.interviewer ?? null,
+    weakSpots: session.weakSpots ?? [],
   };
 }
 
@@ -274,4 +327,121 @@ export async function buildVerdictComment(session: Session, report: Report): Pro
     temperature: 0.7,
     maxTokens: 120,
   });
+}
+
+function clamp(v: number, lo = 0, hi = 100): number {
+  return Math.max(lo, Math.min(hi, v));
+}
+
+// 读档续档：从结局报告重建会话，把「这道题」替换为新回答后，从下一题继续。
+// 不依赖内存会话——收藏的结局卡也能随时回来接着面。
+export async function resumeInterview(params: {
+  direction: Direction;
+  resume: string;
+  stages: StageNode[]; // 报告里的有序阶段与追问
+  targetStage: StageKey;
+  targetRoundId: string; // 续档点：这道题之后
+  replacementAnswer?: string; // 读档重答的新回答（可选）
+  replacementEvent?: ScoreEvent; // 读档重答的评分结果（可选）
+  interviewer?: InterviewerProfile | null; // 面试官画像（从收藏卡续档时带入）
+  weakSpots?: ResumeWeakSpot[]; // 简历软肋（从收藏卡续档时带入）
+}): Promise<{
+  sessionId: string;
+  message: string;
+  scores: Session["scores"];
+  stage: StageKey;
+  history: Session["messages"];
+}> {
+  const { direction, resume, stages, targetStage, targetRoundId } = params;
+  const session = createSession(direction, resume, params.interviewer, params.weakSpots);
+
+  // 展平为有序问答列表，找到续档的那道题
+  const flat: { stage: StageKey; round: Round }[] = [];
+  for (const node of stages) {
+    for (const r of node.rounds) flat.push({ stage: node.stage, round: r });
+  }
+  const targetIndex = flat.findIndex(
+    (f) => f.stage === targetStage && f.round.id === targetRoundId
+  );
+  if (targetIndex < 0) throw new Error("找不到要续档的那道题");
+
+  // 逐题重放到目标题（含），目标题用新回答替换
+  for (let i = 0; i <= targetIndex; i++) {
+    const { stage, round } = flat[i];
+    const isTarget = i === targetIndex;
+    const answer =
+      isTarget && params.replacementAnswer ? params.replacementAnswer : round.answer;
+    const event =
+      isTarget && params.replacementEvent ? params.replacementEvent : round.scoreEvent;
+
+    session.messages.push({ role: "interviewer", content: round.question, stage });
+    session.messages.push({ role: "student", content: answer, stage });
+    session.turn += 1;
+
+    if (event) {
+      session.scores.trust = clamp(session.scores.trust + event.trustDelta);
+      session.scores.recognition = clamp(session.scores.recognition + event.recognitionDelta);
+      session.scores.fit = clamp(session.scores.fit + event.fitDelta);
+      session.scores.danger = clamp(
+        Math.max(session.scores.danger, session.scores.danger + event.dangerDelta)
+      );
+      const ev: ScoreEvent = {
+        ...event,
+        turn: session.turn,
+        stage,
+        question: round.question,
+        answer,
+      };
+      session.scoreEvents.push(ev);
+      session.curve.push({
+        turn: session.turn,
+        stage,
+        trust: session.scores.trust,
+        recognition: session.scores.recognition,
+        fit: session.scores.fit,
+        danger: session.scores.danger,
+      });
+    }
+
+    const rr: Round = {
+      id: round.id,
+      question: round.question,
+      answer,
+      scoreEvent: event
+        ? { ...event, turn: session.turn, stage, question: round.question, answer }
+        : undefined,
+      danger: event ? event.dangerDelta > 0 || event.triggers.length > 0 : round.danger,
+    };
+    const node = session.stages.find((s) => s.stage === stage);
+    if (node) node.rounds.push(rr);
+    else session.stages.push({ stage, label: cfgOf(stage).label, rounds: [rr] });
+
+    session.stageRound += 1;
+    if (session.stageRound >= cfgOf(stage).rounds) {
+      const idx = STAGE_CONFIG.findIndex((s) => s.key === stage);
+      if (idx < STAGE_CONFIG.length - 1) {
+        session.stage = STAGE_CONFIG[idx + 1].key;
+        session.stageRound = 0;
+      }
+    }
+  }
+
+  // 最后一道题没有「下一题」，拒绝续档
+  if (session.stage === "closing" && session.stageRound >= cfgOf("closing").rounds) {
+    throw new Error("这道题已经是最后一道，无法续档");
+  }
+
+  const q = await nextQuestion(session);
+  session.messages.push({ role: "interviewer", content: q, stage: session.stage });
+  session.currentRound = { id: newId(), question: q, answer: "", danger: false };
+  setSession(session.id, session);
+
+  const history = session.messages.slice(0, -1); // 去掉新追问，交回给前端补齐
+  return {
+    sessionId: session.id,
+    message: q,
+    scores: session.scores,
+    stage: session.stage,
+    history,
+  };
 }
