@@ -1,22 +1,13 @@
 @import "tailwindcss";
 
 :root {
+  color-scheme: light;
   --background: #f9f9f7;
   --foreground: #171717;
   --c-trust: #2a78d6;
   --c-recognition: #eb6834;
   --c-fit: #1baf7a;
   --c-danger: #d03b3b;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0d0d0d;
-    --foreground: #ededed;
-    --c-trust: #3987e5;
-    --c-recognition: #d95926;
-    --c-fit: #199e70;
-  }
 }
 
 @theme inline {

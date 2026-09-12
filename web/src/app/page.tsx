@@ -334,7 +334,7 @@ function Interview(props: {
               <div className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 text-lg">
                 👨‍🏫
               </div>
-              <div className="rounded-2xl rounded-tl-sm bg-neutral-100 px-4 py-2.5 text-sm text-neutral-400">
+              <div className="rounded-2xl rounded-tl-sm bg-neutral-100 px-4 py-2.5 text-sm text-neutral-500">
                 面试官正在追问…
               </div>
             </div>
@@ -421,7 +421,7 @@ function ScoreHUD({ scores }: { scores: Scores }) {
           </div>
         ))}
       </div>
-      <p className="mt-4 text-xs leading-relaxed text-neutral-400">
+      <p className="mt-4 text-xs leading-relaxed text-neutral-500">
         信任/认可/匹配从 50 起，随回答增减；危险值从 0 起，只增不减。
         高危险值会触发面试官更尖锐的追问。
       </p>
@@ -495,7 +495,7 @@ function Review({
               )}
             </h3>
             {report.dangerEvents.length === 0 ? (
-              <p className="text-sm text-neutral-400">本场没有踩到危险信号，继续保持。</p>
+              <p className="text-sm text-neutral-500">本场没有踩到危险信号，继续保持。</p>
             ) : (
               <ul className="space-y-3">
                 {report.dangerEvents.map((d, i) => (
@@ -507,10 +507,10 @@ function Review({
                       <span className="text-xs text-neutral-500">{STAGE_LABELS[d.stage]}</span>
                     </div>
                     <p className="mb-1 text-neutral-700">
-                      <span className="text-neutral-400">原话：</span>「{d.evidence}」
+                      <span className="text-neutral-500">原话：</span>「{d.evidence}」
                     </p>
                     <p className="text-neutral-600">
-                      <span className="text-neutral-400">为什么：</span>
+                      <span className="text-neutral-500">为什么：</span>
                       {d.explain}
                     </p>
                   </li>
@@ -612,7 +612,7 @@ function QuestionTree({ stages }: { stages: Report["stages"] }) {
 }
 
 function Delta({ label, v }: { label: string; v: number }) {
-  const cls = v > 0 ? "text-green-600" : v < 0 ? "text-red-600" : "text-neutral-400";
+  const cls = v > 0 ? "text-green-600" : v < 0 ? "text-red-600" : "text-neutral-500";
   return (
     <span className={`rounded bg-neutral-100 px-1.5 py-0.5 ${cls}`}>
       {label} {v > 0 ? "+" : ""}
@@ -664,7 +664,7 @@ function ReanswerList({ report, sessionId }: { report: Report; sessionId: string
         <div key={r.id} className="rounded-lg border border-black/10 p-3">
           <div className="flex items-start justify-between gap-3">
             <p className="text-sm text-neutral-700">
-              <span className="text-neutral-400">[{STAGE_LABELS[r.stage]}]</span> {r.question}
+              <span className="text-neutral-500">[{STAGE_LABELS[r.stage]}]</span> {r.question}
             </p>
             <button
               onClick={() => {
@@ -769,7 +769,7 @@ function CurveChart({ curve }: { curve: Report["curve"] }) {
         {[0, 25, 50, 75, 100].map((g) => (
           <g key={g}>
             <line x1={L} y1={y(g)} x2={W - R} y2={y(g)} stroke="#e1e0d9" strokeWidth="1" />
-            <text x={L - 8} y={y(g) + 4} textAnchor="end" fontSize="10" fill="#898781">
+            <text x={L - 8} y={y(g) + 4} textAnchor="end" fontSize="10" fill="#6b6a66">
               {g}
             </text>
           </g>
