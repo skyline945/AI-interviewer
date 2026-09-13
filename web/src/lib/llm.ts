@@ -45,6 +45,7 @@ export async function chat(opts: ChatOptions): Promise<string> {
       messages,
       temperature,
       max_tokens: maxTokens,
+      thinking: { type: "disabled" }, // 关闭思考降延迟（DeepSeek Anthropic 端点已确认支持）
     }),
     cache: "no-store",
   });
