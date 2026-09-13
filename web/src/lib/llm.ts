@@ -1,4 +1,4 @@
-// Anthropic 兼容端点客户端（本地代理 → deepseek 后端）
+// Anthropic 兼容端点客户端：本地代理（127.0.0.1:15721）或 DeepSeek 公网 Anthropic 端点（https://api.deepseek.com/anthropic）
 // 响应 content 为数组，需过滤 type === "text"
 
 const BASE = process.env.ANTHROPIC_BASE_URL || "http://127.0.0.1:15721";
@@ -45,7 +45,6 @@ export async function chat(opts: ChatOptions): Promise<string> {
       messages,
       temperature,
       max_tokens: maxTokens,
-      thinking: { type: "disabled" },
     }),
     cache: "no-store",
   });

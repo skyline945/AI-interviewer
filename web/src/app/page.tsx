@@ -9,6 +9,7 @@ import type {
   Round,
   ScoreEvent,
   Scores,
+  Session,
   StageKey,
 } from "@/lib/types";
 import { DIRECTION_NAMES, SAMPLE_RESUMES } from "@/lib/seed/data";
@@ -67,7 +68,7 @@ export default function Home() {
   const [phase, setPhase] = useState<Phase>("setup");
   const [direction, setDirection] = useState<Direction>("intelligence");
   const [resume, setResume] = useState("");
-  const [sessionId, setSessionId] = useState("");
+  const [session, setSession] = useState<Session | null>(null);
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [scores, setScores] = useState<Scores>(INIT_SCORES);
   const [stage, setStage] = useState<StageKey>("opening");
@@ -126,7 +127,7 @@ export default function Home() {
     setError("");
     try {
       const data = await api({ action: "start", direction, resume, interviewer: interviewerProfile, weakSpots });
-      setSessionId(data.sessionId);
+      setSession(data.session);
       setScores(data.scores);
       setStage(data.stage);
       setMessages([{ role: "interviewer", content: data.message, stage: data.stage }]);
@@ -142,14 +143,15 @@ export default function Home() {
 
   async function handleSend() {
     const content = input.trim();
-    if (!content || pending || done) return;
+    if (!content || pending || done || !session) return;
     const took = Math.max(0, Math.round((Date.now() - qAskedAtRef.current) / 1000));
     setInput("");
     setMessages((m) => [...m, { role: "student", content, stage, hesitate: took }]);
     setPending(true);
     setError("");
     try {
-      const data = await api({ action: "message", sessionId, content });
+      const data = await api({ action: "message", session, content });
+      setSession(data.session);
       setScores(data.scores);
       setStage(data.stage);
       if (data.done) {
@@ -170,10 +172,11 @@ export default function Home() {
   }
 
   async function handleEnd() {
+    if (!session) return;
     setPending(true);
     setError("");
     try {
-      const data = await api({ action: "end", sessionId });
+      const data = await api({ action: "end", session });
       setReport(data);
       setSaved(isCollected(data.sessionId));
       setFromCollection(false);
@@ -187,6 +190,7 @@ export default function Home() {
 
   function handleRestart() {
     setPhase("setup");
+    setSession(null);
     setResume("");
     setMessages([]);
     setScores(INIT_SCORES);
@@ -219,7 +223,7 @@ export default function Home() {
         interviewer: report.interviewer ?? null,
         weakSpots: report.weakSpots ?? [],
       });
-      setSessionId(data.sessionId);
+      setSession(data.session);
       setScores(data.scores);
       setStage(data.stage);
       setMessages([

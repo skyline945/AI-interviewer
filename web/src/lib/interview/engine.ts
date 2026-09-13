@@ -12,7 +12,7 @@ import type {
   StageNode,
   Verdict,
 } from "../types";
-import { newId, setSession } from "../sessionStore";
+import { newId } from "../sessionStore";
 import { interviewerSystem, FOLLOWUP_INSTRUCTION, modelAnswerSystem, verdictCommentSystem, resumeWeaknessSystem } from "./prompts";
 import { judgeAnswer } from "./judge";
 import {
@@ -152,19 +152,19 @@ export async function startInterview(
   resume: string,
   interviewer?: InterviewerProfile | null,
   weakSpots?: ResumeWeakSpot[]
-): Promise<{ sessionId: string; message: string; scores: Session["scores"]; stage: StageKey }> {
+): Promise<{ session: Session; sessionId: string; message: string; scores: Session["scores"]; stage: StageKey }> {
   const session = createSession(direction, resume, interviewer, weakSpots);
   const q = await nextQuestion(session);
   session.messages.push({ role: "interviewer", content: q, stage: "opening" });
   session.currentRound = { id: newId(), question: q, answer: "", danger: false };
-  setSession(session.id, session);
-  return { sessionId: session.id, message: q, scores: session.scores, stage: "opening" };
+  return { session, sessionId: session.id, message: q, scores: session.scores, stage: "opening" };
 }
 
 export async function handleMessage(
   session: Session,
   content: string
 ): Promise<{
+  session: Session;
   message: string | null;
   scores: Session["scores"];
   scoreEvent: Session["scoreEvents"][number];
@@ -211,9 +211,7 @@ export async function handleMessage(
   } else {
     session.currentRound = null;
   }
-  setSession(session.id, session);
-
-  return { message, scores: session.scores, scoreEvent: event, stage: session.stage, done };
+  return { session, message, scores: session.scores, scoreEvent: event, stage: session.stage, done };
 }
 
 export function buildReport(session: Session): Report {
@@ -346,6 +344,7 @@ export async function resumeInterview(params: {
   interviewer?: InterviewerProfile | null; // 面试官画像（从收藏卡续档时带入）
   weakSpots?: ResumeWeakSpot[]; // 简历软肋（从收藏卡续档时带入）
 }): Promise<{
+  session: Session;
   sessionId: string;
   message: string;
   scores: Session["scores"];
@@ -434,10 +433,10 @@ export async function resumeInterview(params: {
   const q = await nextQuestion(session);
   session.messages.push({ role: "interviewer", content: q, stage: session.stage });
   session.currentRound = { id: newId(), question: q, answer: "", danger: false };
-  setSession(session.id, session);
 
   const history = session.messages.slice(0, -1); // 去掉新追问，交回给前端补齐
   return {
+    session,
     sessionId: session.id,
     message: q,
     scores: session.scores,

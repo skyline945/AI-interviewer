@@ -1,4 +1,3 @@
-import { getSession } from "@/lib/sessionStore";
 import {
   startInterview,
   handleMessage,
@@ -15,16 +14,18 @@ import type {
   InterviewerProfile,
   ResumeWeakSpot,
   ScoreEvent,
+  Session,
   StageKey,
   StageNode,
 } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 type Action =
   | { action: "start"; direction: Direction; resume: string; interviewer?: InterviewerProfile | null; weakSpots?: ResumeWeakSpot[] }
-  | { action: "message"; sessionId: string; content: string }
-  | { action: "end"; sessionId: string }
+  | { action: "message"; session: Session; content: string }
+  | { action: "end"; session: Session }
   | {
       action: "reanswer";
       direction: Direction;
@@ -75,9 +76,9 @@ export async function POST(request: Request) {
       }
 
       case "message": {
-        const session = getSession(body.sessionId);
+        const session = body.session;
         if (!session) {
-          return Response.json({ error: "会话不存在或已过期" }, { status: 404 });
+          return Response.json({ error: "缺少会话状态，请重新开始" }, { status: 400 });
         }
         if (!body.content || body.content.trim().length === 0) {
           return Response.json({ error: "回答不能为空" }, { status: 400 });
@@ -87,9 +88,9 @@ export async function POST(request: Request) {
       }
 
       case "end": {
-        const session = getSession(body.sessionId);
+        const session = body.session;
         if (!session) {
-          return Response.json({ error: "会话不存在或已过期" }, { status: 404 });
+          return Response.json({ error: "缺少会话状态，请重新开始" }, { status: 400 });
         }
         const report = buildReport(session);
         try {

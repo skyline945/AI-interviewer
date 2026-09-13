@@ -1,25 +1,6 @@
-// 内存会话存储（本地单进程 / next start 下可持久到进程结束）
-// Demo 单用户足够；多用户/持久化写进 Memo「下一步」
-
-import type { Session } from "./types";
-
-type Store = Map<string, Session>;
-
-const g = globalThis as unknown as { __yanmianSessions?: Store };
-
-if (!g.__yanmianSessions) {
-  g.__yanmianSessions = new Map();
-}
-
-const store = g.__yanmianSessions;
-
-export function getSession(id: string): Session | undefined {
-  return store.get(id);
-}
-
-export function setSession(id: string, session: Session): void {
-  store.set(id, session);
-}
+// 会话 ID 生成。
+// 说明：会话本身由前端持有并随每个请求回传（无状态部署），服务端不再存储会话。
+// 原因：Vercel serverless 多实例无状态，内存 Map 会丢；改为「前端持有会话」后任意实例都能处理。
 
 export function newId(): string {
   return (
